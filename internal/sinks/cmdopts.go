@@ -9,4 +9,5 @@ type CmdOpts struct {
 	Retention             int           `long:"retention" mapstructure:"retention" description:"If set, metrics older than that will be deleted" default:"14" env:"PW_RETENTION"`
 	RealDbnameField       string        `long:"real-dbname-field" mapstructure:"real-dbname-field" description:"Tag key for real database name" env:"PW_REAL_DBNAME_FIELD" default:"real_dbname"`
 	SystemIdentifierField string        `long:"system-identifier-field" mapstructure:"system-identifier-field" description:"Tag key for system identifier value" env:"PW_SYSTEM_IDENTIFIER_FIELD" default:"sys_id"`
+	AgentMode             bool          `long:"agent-mode" mapstructure:"agent-mode" description:"Agent mode - disables maintenance tasks like partition deletion and unique sources maintenance" env:"PW_AGENT_MODE"`
 }

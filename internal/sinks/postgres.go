@@ -65,8 +65,13 @@ func NewWriterFromPostgresConn(ctx context.Context, conn db.PgxPoolIface, opts *
 	if err = pgw.EnsureBuiltinMetricDummies(); err != nil {
 		return
 	}
-	go pgw.deleteOldPartitions(deleterDelay)
-	go pgw.maintainUniqueSources()
+	if !opts.AgentMode {
+		go pgw.deleteOldPartitions(deleterDelay)
+		go pgw.maintainUniqueSources()
+		l.Info("maintenance tasks started (partition deletion and unique sources maintenance)")
+	} else {
+		l.Info("agent mode enabled, maintenance tasks disabled")
+	}
 	go pgw.poll()
 	l.Info(`measurements sink is activated`)
 	return
@@ -650,4 +655,135 @@ func (pgw *PostgresWriter) AddDBUniqueMetricToListingTable(dbUnique, metric stri
 			)`
 	_, err := pgw.sinkDb.Exec(pgw.ctx, sql, dbUnique, metric)
 	return err
+}
+
+// RunPartitionCleanup executes partition cleanup with the specified retention period in days
+func (pgw *PostgresWriter) RunPartitionCleanup(retentionDays int, dryRun bool) (int, error) {
+	logger := log.GetLogger(pgw.ctx)
+	logger.Infof("Starting partition cleanup (retention: %d days, dry-run: %v)", retentionDays, dryRun)
+
+	if pgw.metricSchema == DbStorageSchemaTimescale {
+		if dryRun {
+			// For TimescaleDB, we can't easily do a dry run without additional SQL functions
+			logger.Info("Dry run not fully supported for TimescaleDB - would drop old chunks")
+			return 0, nil
+		}
+		return pgw.DropOldTimePartitions(retentionDays)
+	} else if pgw.metricSchema == DbStorageSchemaPostgres {
+		partsToDrop, err := pgw.GetOldTimePartitions(retentionDays)
+		if err != nil {
+			return 0, fmt.Errorf("failed to get old partitions: %w", err)
+		}
+
+		if dryRun {
+			logger.Infof("DRY RUN: Would drop %d old partitions", len(partsToDrop))
+			for _, partition := range partsToDrop {
+				logger.Infof("DRY RUN: Would drop partition: %s", partition)
+			}
+			return len(partsToDrop), nil
+		}
+
+		// Execute actual cleanup
+		dropped := 0
+		for _, toDrop := range partsToDrop {
+			sqlDropTable := `DROP TABLE IF EXISTS ` + toDrop
+			if _, err := pgw.sinkDb.Exec(pgw.ctx, sqlDropTable); err != nil {
+				logger.Errorf("Failed to drop old partition %s: %v", toDrop, err)
+			} else {
+				logger.Infof("Dropped partition: %s", toDrop)
+				dropped++
+			}
+		}
+		return dropped, nil
+	}
+	return 0, fmt.Errorf("unknown storage schema")
+}
+
+// RunUniqueSourcesMaintenance executes the unique sources maintenance task once
+func (pgw *PostgresWriter) RunUniqueSourcesMaintenance() error {
+	logger := log.GetLogger(pgw.ctx)
+	logger.Info("Starting unique sources maintenance...")
+
+	// Get advisory lock to ensure only one instance runs this
+	sqlGetAdvisoryLock := `SELECT pg_try_advisory_lock(1571543679778230000) AS have_lock`
+	var lock bool
+	if err := pgw.sinkDb.QueryRow(pgw.ctx, sqlGetAdvisoryLock).Scan(&lock); err != nil {
+		return fmt.Errorf("failed to get advisory lock: %w", err)
+	}
+	if !lock {
+		return fmt.Errorf("another instance is already running maintenance (advisory lock not acquired)")
+	}
+
+	defer func() {
+		// Release advisory lock
+		pgw.sinkDb.Exec(pgw.ctx, `SELECT pg_advisory_unlock(1571543679778230000)`)
+	}()
+
+	sqlTopLevelMetrics := `SELECT table_name FROM admin.get_top_level_metric_tables()`
+	sqlDistinct := `
+	WITH RECURSIVE t(dbname) AS (
+		SELECT MIN(dbname) AS dbname FROM %s
+		UNION
+		SELECT (SELECT MIN(dbname) FROM %s WHERE dbname > t.dbname) FROM t )
+	SELECT dbname FROM t WHERE dbname NOTNULL ORDER BY 1`
+	sqlDelete := `DELETE FROM admin.all_distinct_dbname_metrics WHERE NOT dbname = ANY($1) and metric = $2`
+	sqlDeleteAll := `DELETE FROM admin.all_distinct_dbname_metrics WHERE metric = $1`
+	sqlAdd := `
+		INSERT INTO admin.all_distinct_dbname_metrics SELECT u, $2 FROM (select unnest($1::text[]) as u) x
+		WHERE NOT EXISTS (select * from admin.all_distinct_dbname_metrics where dbname = u and metric = $2)
+		RETURNING *`
+
+	rows, _ := pgw.sinkDb.Query(pgw.ctx, sqlTopLevelMetrics)
+	allDistinctMetricTables, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return fmt.Errorf("failed to get metric tables: %w", err)
+	}
+
+	processedMetrics := 0
+	for _, tableName := range allDistinctMetricTables {
+		foundDbnamesMap := make(map[string]bool)
+		foundDbnamesArr := make([]string, 0)
+		metricName := strings.Replace(tableName, "public.", "", 1)
+
+		logger.Debugf("Processing metric: %s", metricName)
+		rows, _ := pgw.sinkDb.Query(pgw.ctx, fmt.Sprintf(sqlDistinct, tableName, tableName))
+		ret, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			logger.Errorf("Failed to process metric '%s': %v", metricName, err)
+			continue
+		}
+
+		for _, drDbname := range ret {
+			foundDbnamesMap[drDbname] = true
+		}
+
+		for k := range foundDbnamesMap {
+			foundDbnamesArr = append(foundDbnamesArr, k)
+		}
+
+		if len(foundDbnamesArr) == 0 {
+			_, err = pgw.sinkDb.Exec(pgw.ctx, sqlDeleteAll, metricName)
+			if err != nil {
+				logger.Errorf("Failed to delete entries for metric '%s': %v", metricName, err)
+			}
+		} else {
+			cmdTag, err := pgw.sinkDb.Exec(pgw.ctx, sqlDelete, foundDbnamesArr, metricName)
+			if err != nil {
+				logger.Errorf("Failed to update entries for metric '%s': %v", metricName, err)
+			} else if cmdTag.RowsAffected() > 0 {
+				logger.Infof("Removed %d stale entries for metric: %s", cmdTag.RowsAffected(), metricName)
+			}
+
+			cmdTag, err = pgw.sinkDb.Exec(pgw.ctx, sqlAdd, foundDbnamesArr, metricName)
+			if err != nil {
+				logger.Errorf("Failed to add entries for metric '%s': %v", metricName, err)
+			} else if cmdTag.RowsAffected() > 0 {
+				logger.Infof("Added %d new entries for metric: %s", cmdTag.RowsAffected(), metricName)
+			}
+		}
+		processedMetrics++
+	}
+
+	logger.Infof("Unique sources maintenance completed. Processed %d metrics", processedMetrics)
+	return nil
 }

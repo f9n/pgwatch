@@ -60,6 +60,7 @@ func addCommands(parser *flags.Parser, opts *Options) {
 	_, _ = parser.AddCommand("metric", "Manage metrics", "", NewMetricCommand(opts))
 	_, _ = parser.AddCommand("source", "Manage sources", "", NewSourceCommand(opts))
 	_, _ = parser.AddCommand("config", "Manage configurations", "", NewConfigCommand(opts))
+	_, _ = parser.AddCommand("maintenance", "Manage database maintenance tasks", "", NewMaintenanceCommand(opts))
 }
 
 // New returns a new instance of Options and immediately executes the subcommand if specified.

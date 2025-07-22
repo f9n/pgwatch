@@ -68,6 +68,10 @@
 //	--system-identifier-field=           Tag key for system identifier value
 //	                                     (default: sys_id)
 //	                                     [$PW_SYSTEM_IDENTIFIER_FIELD]
+//	--agent-mode                         Agent mode - disables maintenance
+//	                                     tasks like partition deletion and
+//	                                     unique sources maintenance
+//	                                     [$PW_AGENT_MODE]
 //
 // Logging:
 //
@@ -107,4 +111,7 @@
 //	   print-sql       Get and print SQL for a given metric
 //	source         Manage sources
 //	   ping            Try to connect to configured sources, report errors if any and exit
+//	maintenance    Manage database maintenance tasks
+//	   cleanup                   Clean up old partitions from metrics database
+//	   maintain-unique-sources   Update unique sources listings for Grafana dropdowns
 package main
