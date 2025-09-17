@@ -67,9 +67,10 @@ jobs:
         VERSION: ${{ github.ref_name }}
         GIT_TIME: ${{ steps.version.outputs.RELEASE_TIME }}     
       with:
-        name: cybertecpostgresql/pgwatch${{ matrix.image.prefix }}
-        username: ${{ secrets.DOCKER_USERNAME }}
-        password: ${{ secrets.DOCKER_PASSWORD }}
+        name: ghcr.io/${{ github.repository }}${{ matrix.image.prefix }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+        registry: ghcr.io
         dockerfile: docker/${{ matrix.image.file }}
         buildargs: GIT_HASH,GIT_TIME
         tags: ${{ github.ref_name }}
@@ -83,9 +84,10 @@ jobs:
         VERSION: ${{ github.ref_name }}
         GIT_TIME: ${{ steps.version.outputs.RELEASE_TIME }}     
       with:
-        name: cybertecpostgresql/pgwatch${{ matrix.image.prefix }}
-        username: ${{ secrets.DOCKER_USERNAME }}
-        password: ${{ secrets.DOCKER_PASSWORD }}
+        name: ghcr.io/${{ github.repository }}${{ matrix.image.prefix }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+        registry: ghcr.io
         dockerfile: docker/${{ matrix.image.file }}
         buildargs: GIT_HASH,GIT_TIME
         tags: latest
@@ -99,10 +101,11 @@ jobs:
         VERSION: ${{ github.ref_name }}
         GIT_TIME: ${{ steps.version.outputs.RELEASE_TIME }}     
       with:
-        name: cybertecpostgresql/pgwatch${{ matrix.image.prefix }}
-        username: ${{ secrets.DOCKER_USERNAME }}
-        password: ${{ secrets.DOCKER_PASSWORD }}
+        name: ghcr.io/${{ github.repository }}${{ matrix.image.prefix }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+        registry: ghcr.io
         dockerfile: docker/${{ matrix.image.file }}
         buildargs: GIT_HASH,GIT_TIME
         tag_semver: true
-        platforms: linux/amd64,linux/arm64      
+        platforms: linux/amd64,linux/arm64
