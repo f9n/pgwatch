@@ -76,7 +76,7 @@ jobs:
         tags: ${{ github.ref_name }}
         platforms: linux/amd64,linux/arm64
 
-    - name: Publish "latest" tag to Registry
+    - name: Publish "latest" and tag-based to Registry
       if: ${{ !contains(github.ref_name, 'beta') }}
       uses: elgohr/Publish-Docker-Github-Action@v5
       env:
@@ -90,7 +90,7 @@ jobs:
         registry: ghcr.io
         dockerfile: docker/${{ matrix.image.file }}
         buildargs: GIT_HASH,GIT_TIME
-        tags: latest
+        tags: latest,${{ github.ref_name }}
         platforms: linux/amd64,linux/arm64
 
     - name: Publish "X.X.X, X.X, X" tags to Registry
